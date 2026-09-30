@@ -77,7 +77,7 @@ Insert the path of the main folder
 For example:
 
 ```text
-C:\Users\Patrik\Desktop\Test
+C:\Users\Username\Desktop\Test
 ```
 
 The program will then scan the files inside the folder and move them into the appropriate category folders.
@@ -86,11 +86,11 @@ The program will then scan the files inside the folder and move them into the ap
 
 ```text
 Test/
-├── foto.jpg
-├── documento.pdf
-├── canzone.mp3
-├── programma.cpp
-└── archivio.zip
+├── image.jpg
+├── document.pdf
+├── song.mp3
+├── program.cpp
+└── archive.zip
 ```
 
 ### After
@@ -98,15 +98,15 @@ Test/
 ```text
 Test/
 ├── Images/
-│   └── foto.jpg
+│   └── image.jpg
 ├── Documents/
-│   └── documento.pdf
+│   └── document.pdf
 ├── Music/
-│   └── canzone.mp3
+│   └── song.mp3
 ├── Code/
-│   └── programma.cpp
+│   └── program.cpp
 └── Archives/
-    └── archivio.zip
+    └── archive.zip
 ```
 
 Files with unsupported extensions are moved to:
@@ -123,21 +123,6 @@ file-organizer/
 ├── README.md
 └── .gitignore
 ```
-
-## 🧠 What I Learned
-
-This project helped me practice several important C++ concepts:
-
-* `std::filesystem::path`
-* `std::filesystem::directory_iterator`
-* `std::filesystem::directory_entry`
-* Checking whether paths and directories exist
-* Creating directories programmatically
-* Moving files with `std::filesystem::rename`
-* Using `std::map` to associate file extensions with categories
-* Using iterators and `map::find()`
-* Working with C++17 features
-* Handling paths and file extensions
 
 ## 🔮 Future Improvements
 
