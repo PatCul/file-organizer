@@ -4,7 +4,7 @@
 #include <map>
 #include "utils.hpp"
 
-void organizeDirectory(const fs::path& directory)
+void organizeDirectory(const fs::path& directory, bool dryRun)
 {
     std::map<std::string, std::string> categories = {
 
@@ -148,18 +148,33 @@ void organizeDirectory(const fs::path& directory)
 
         if (!fs::exists(categoryFolder))
         {
-            fs::create_directory(categoryFolder);
+            if (!dryRun)
+            {
+                fs::create_directory(categoryFolder);
+            }
         }
 
         fs::path newPath = categoryFolder / entry.path().filename();
 
         newPath = getUniquePath(newPath);
 
-        fs::rename(entry.path(), newPath);
+        if(!dryRun)
+        {
+            fs::rename(entry.path(), newPath);
+        }
+        else
+        {
+            cout << "[DRY RUN] "
+                << entry.path()
+                << " -> "
+                << newPath
+                << endl;
+        }
     }
 }
 
-fs::path getUniquePath(const fs::path& path) {
+fs::path getUniquePath(const fs::path& path)
+{
     if (!fs::exists(path))
     {
         return path;
