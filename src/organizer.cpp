@@ -1,36 +1,12 @@
-#include <iostream>
-#include <filesystem>
-#include <string>
-#include <map>
-#include <algorithm>
-#include <cctype>
+#include "organizer.hpp"
 
+#include <iostream>
+#include <map>
 #include "utils.hpp"
 
-using namespace std;
-
-namespace fs = filesystem;
-
-int main() {
-
-    //taking the path of the main folder
-    cout<<"Insert the path of the main folder"<<endl;
-
-    string path;
-    getline(cin, path);
-    fs::path mainFolder(path);
-
-    //checking if the path exists and is a folder
-    if(!fs::exists(mainFolder)) {
-        cerr<<"Error: The path is wrong or don't exists"<<endl;
-        return 1;
-    }
-    if(!fs::is_directory(mainFolder)) {
-        cerr<<"Error: The specified path is not a folder"<<endl;
-        return 1;
-    }
-
-    map<string, string> categories = {
+void organizeDirectory(const fs::path& directory)
+{
+    std::map<std::string, std::string> categories = {
 
         // Documents
         {".txt", "Documents"},
@@ -136,47 +112,48 @@ int main() {
         {".db", "Database"},
         {".sqlite", "Database"},
         {".sqlite3", "Database"},
-        
+
         // Logs
         {".log", "Logs"},
 
-        //Backups
+        // Backups
         {".bak", "Backups"},
 
-        //Temporary
+        // Temporary
         {".tmp", "Temporary"}
-
-
     };
 
-    //reading all the files extensions to understand where to send them
-    //fs::directory_iterator(mainFolder);
-    for(fs::directory_entry entry : fs::directory_iterator(mainFolder)) {
-        if(entry.is_regular_file()) {
-
-            string extension = entry.path().extension().string();
-            extension = toLower(extension);
-            auto it = categories.find(extension);
-            fs::path categoryFolder;
-
-            if (it == categories.end()) {
-                // extension not found
-                categoryFolder = mainFolder / "Other";
-            }
-            else {
-                // extension found
-                categoryFolder = mainFolder / it->second;
-            }
-
-            if(!fs::exists(categoryFolder)) {
-                fs::create_directory(categoryFolder);
-            }
-
-            fs::path newPath = categoryFolder / entry.path().filename();
-            fs::rename(entry.path(), newPath);
-            
+    for (const fs::directory_entry& entry : fs::directory_iterator(directory))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
         }
-    }
 
-    return 0;
+        std::string extension =
+            toLower(entry.path().extension().string());
+
+        auto it = categories.find(extension);
+
+        fs::path categoryFolder;
+
+        if (it == categories.end())
+        {
+            categoryFolder = directory / "Other";
+        }
+        else
+        {
+            categoryFolder = directory / it->second;
+        }
+
+        if (!fs::exists(categoryFolder))
+        {
+            fs::create_directory(categoryFolder);
+        }
+
+        fs::path newPath =
+            categoryFolder / entry.path().filename();
+
+        fs::rename(entry.path(), newPath);
+    }
 }
