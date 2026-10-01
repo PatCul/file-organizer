@@ -57,7 +57,7 @@ Make sure you have a C++ compiler with **C++17** support installed.
 For example, using `g++`:
 
 ```bash
-g++ -std=c++17 main.cpp -o file-organizer.exe
+g++ -std=c++17 src/main.cpp src/organizer.cpp src/utils.cpp -o file-organizer.exe
 ```
 
 ## ▶️ How to Use
