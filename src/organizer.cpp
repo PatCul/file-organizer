@@ -151,9 +151,38 @@ void organizeDirectory(const fs::path& directory)
             fs::create_directory(categoryFolder);
         }
 
-        fs::path newPath =
-            categoryFolder / entry.path().filename();
+        fs::path newPath = categoryFolder / entry.path().filename();
+
+        newPath = getUniquePath(newPath);
 
         fs::rename(entry.path(), newPath);
     }
+}
+
+fs::path getUniquePath(const fs::path& path) {
+    if (!fs::exists(path))
+    {
+        return path;
+    }
+
+    int counter = 1;
+
+    fs::path newPath;
+
+    do
+    {
+        std::string name =
+            path.stem().string()
+            + " ("
+            + std::to_string(counter)
+            + ")"
+            + path.extension().string();
+
+        newPath = path.parent_path() / name;
+
+        counter++;
+
+    } while (fs::exists(newPath));
+
+    return newPath;
 }
