@@ -2,6 +2,8 @@
 #include <filesystem>
 #include <string>
 #include <map>
+#include <algorithm>
+#include <cctype>
 using namespace std;
 
 namespace fs = filesystem;
@@ -150,6 +152,7 @@ int main() {
         if(entry.is_regular_file()) {
 
             string extension = entry.path().extension().string();
+            transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
             auto it = categories.find(extension);
             fs::path categoryFolder;
 
