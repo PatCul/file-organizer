@@ -1,6 +1,5 @@
 #pragma once
 
 #include <string>
-using namespace std;
 
-string toLower(string str);
+std::string toLower(std::string str);

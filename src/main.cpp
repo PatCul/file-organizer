@@ -88,9 +88,11 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    OrganizeSummary summary;
+
     try
     {
-        organizeDirectory(mainFolder, dryRun);
+        summary = organizeDirectory(mainFolder, dryRun);
     }
     catch (const fs::filesystem_error& e)
     {
@@ -98,5 +100,16 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    return 0;
+    cout << endl;
+    cout << "Summary" << (dryRun ? " (dry run)" : "") << endl;
+    cout << "  Files " << (dryRun ? "to move" : "moved") << ": "
+         << summary.moved << endl;
+    cout << "  Errors: " << summary.failed << endl;
+
+    for (const string& error : summary.errors)
+    {
+        cerr << "  - " << error << endl;
+    }
+
+    return summary.failed > 0 ? 1 : 0;
 }

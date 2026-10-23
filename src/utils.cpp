@@ -2,14 +2,14 @@
 #include <algorithm>
 #include <cctype>
 
-string toLower(string str) {
-    transform(
+std::string toLower(std::string str) {
+    std::transform(
         str.begin(),
         str.end(),
         str.begin(),
         [](unsigned char c)
         {
-            return tolower(c);
+            return std::tolower(c);
         }
     );
 
