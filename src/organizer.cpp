@@ -1,9 +1,13 @@
 #include "organizer.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
+#include "journal.hpp"
 #include "utils.hpp"
 
 OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
@@ -119,11 +123,19 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
         {".log", "Logs"},
 
         // Backups
-        {".bak", "Backups"},
-
-        // Temporary
-        {".tmp", "Temporary"}
+        {".bak", "Backups"}
     };
+
+    // Files still being downloaded or written by another program:
+    // moving them would break the download
+    const std::set<std::string> incompleteDownloads = {
+        ".crdownload", // Chrome, Edge
+        ".part",       // Firefox
+        ".download",   // Safari
+        ".tmp"
+    };
+
+    OrganizeSummary summary;
 
     // Collect the files first: moving them while iterating the
     // directory would modify it during the iteration
@@ -131,13 +143,29 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
 
     for (const fs::directory_entry& entry : fs::directory_iterator(directory))
     {
-        if (entry.is_regular_file())
+        if (!entry.is_regular_file()
+            || entry.path().filename() == JOURNAL_FILE_NAME)
         {
-            files.push_back(entry.path());
+            continue;
         }
+
+        if (incompleteDownloads.count(toLower(entry.path().extension().string())))
+        {
+            summary.skipped++;
+            continue;
+        }
+
+        files.push_back(entry.path());
     }
 
-    OrganizeSummary summary;
+    // Opened only when there is something to move, so a run that
+    // moves nothing keeps the log of the previous run
+    std::optional<JournalWriter> journal;
+
+    if (!dryRun && !files.empty())
+    {
+        journal.emplace(directory);
+    }
 
     for (const fs::path& file : files)
     {
@@ -165,6 +193,7 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
                 if (!dryRun)
                 {
                     fs::create_directory(categoryFolder);
+                    journal->recordCreateDirectory(categoryFolder.lexically_relative(directory));
                 }
             }
 
@@ -175,6 +204,9 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
             if (!dryRun)
             {
                 fs::rename(file, newPath);
+                journal->recordMove(
+                    file.lexically_relative(directory),
+                    newPath.lexically_relative(directory));
             }
             else
             {
@@ -190,7 +222,105 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
         catch (const fs::filesystem_error& e)
         {
             summary.failed++;
-            summary.errors.push_back(file.filename().string() + ": " + e.what());
+            summary.errors.push_back(file.filename().u8string() + ": " + e.what());
+        }
+    }
+
+    return summary;
+}
+
+OrganizeSummary undoLastRun(const fs::path& directory, bool dryRun)
+{
+    std::vector<JournalEntry> entries = readJournal(directory);
+
+    OrganizeSummary summary;
+
+    // Moves that could not be undone stay in the log, so the undo
+    // can be retried after fixing the problem
+    std::vector<JournalEntry> remaining;
+
+    auto fail = [&](const JournalEntry& entry, const std::string& message)
+    {
+        summary.failed++;
+        summary.errors.push_back(entry.to.u8string() + ": " + message);
+        remaining.push_back(entry);
+    };
+
+    // Undo in reverse order: files are moved back before their
+    // category folders are removed
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it)
+    {
+        const JournalEntry& entry = *it;
+
+        if (entry.type == JournalEntry::Type::CreateDirectory)
+        {
+            fs::path folder = directory / entry.from;
+
+            // Folders that still contain files are kept
+            if (!dryRun && fs::is_directory(folder) && fs::is_empty(folder))
+            {
+                std::error_code error;
+                fs::remove(folder, error);
+            }
+
+            // If some moves failed, the folder may become empty after a
+            // retry: keep it in the log so the retry can remove it
+            if (fs::is_directory(folder))
+            {
+                remaining.push_back(entry);
+            }
+
+            continue;
+        }
+
+        fs::path current = directory / entry.to;
+        fs::path original = directory / entry.from;
+
+        try
+        {
+            if (!fs::exists(current))
+            {
+                fail(entry, "the file no longer exists");
+                continue;
+            }
+
+            if (fs::exists(original))
+            {
+                fail(entry, "a file named " + entry.from.u8string() + " already exists");
+                continue;
+            }
+
+            if (!dryRun)
+            {
+                fs::rename(current, original);
+            }
+            else
+            {
+                std::cout << "[DRY RUN] "
+                    << entry.to.u8string()
+                    << " -> "
+                    << entry.from.u8string()
+                    << std::endl;
+            }
+
+            summary.moved++;
+        }
+        catch (const fs::filesystem_error& e)
+        {
+            fail(entry, e.what());
+        }
+    }
+
+    if (!dryRun)
+    {
+        if (summary.failed == 0)
+        {
+            fs::remove(directory / JOURNAL_FILE_NAME);
+        }
+        else
+        {
+            std::reverse(remaining.begin(), remaining.end());
+            writeJournal(directory, remaining);
         }
     }
 

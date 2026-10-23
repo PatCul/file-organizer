@@ -2,7 +2,7 @@
 
 A lightweight command-line file organizer written in C++17.
 
-File Organizer automatically organizes files in a directory into categorized subdirectories based on their file extensions. It also provides a safe **dry-run mode**, duplicate filename handling, command-line arguments, and per-file error handling.
+File Organizer automatically organizes files in a directory into categorized subdirectories based on their file extensions. It also provides a safe **dry-run mode**, an **undo** command, duplicate filename handling, command-line arguments, and per-file error handling.
 
 ## Features
 
@@ -13,7 +13,9 @@ File Organizer automatically organizes files in a directory into categorized sub
 * 💻 Command-line interface
 * ❓ `--help` command
 * ⚠️ Per-file error handling: a locked or inaccessible file is reported and skipped, the others are still organized
-* 📊 Summary at the end with moved and failed files
+* ⏳ Incomplete downloads (`.crdownload`, `.part`, `.download`, `.tmp`) are left untouched
+* ↩️ `--undo` command to restore the last organization
+* 📊 Summary at the end with moved, skipped and failed files
 * 📦 Files with unknown extensions are moved to `Other`
 * 🔤 Case-insensitive file extension handling
 * 🧩 Modular C++ source structure
@@ -41,7 +43,6 @@ The organizer currently supports categories such as:
 | Database      | `.db`, `.sqlite`, `.sqlite3`                                                              |
 | Logs          | `.log`                                                                                    |
 | Backups       | `.bak`                                                                                    |
-| Temporary     | `.tmp`                                                                                    |
 
 Files whose extensions are not recognized are placed in the `Other` directory.
 
@@ -81,6 +82,7 @@ At the end, the program prints a summary:
 ```text
 Summary
   Files moved: 5
+  Skipped (incomplete downloads): 1
   Errors: 0
 ```
 
@@ -135,6 +137,39 @@ Example output:
 
 No files are moved while running in dry-run mode.
 
+## Incomplete Downloads
+
+Files that are still being downloaded are never moved, because moving them would break the download:
+
+| Extension     | Created by    |
+| ------------- | ------------- |
+| `.crdownload` | Chrome, Edge  |
+| `.part`       | Firefox       |
+| `.download`   | Safari        |
+| `.tmp`        | Many programs |
+
+They are counted as skipped in the summary and will be organized in a later run, once the download is complete.
+
+## Undo
+
+Every organization is recorded in a log file, `.file-organizer.log`, inside the organized directory. The `--undo` option uses it to move every file back to its original place and to remove the category folders created by the organizer (only if they are empty):
+
+```bash
+file-organizer --undo "C:\path\to\directory"
+```
+
+It can be combined with `--dry-run` to preview what would be restored:
+
+```bash
+file-organizer --undo --dry-run "C:\path\to\directory"
+```
+
+Things to know:
+
+* Only the **last** organization can be undone: each run that moves at least one file replaces the log.
+* If a file can't be restored (for example because a file with the same name was created in the meantime), it is reported and kept in the log, so you can fix the problem and run `--undo` again.
+* When everything has been restored, the log file is deleted.
+
 ## Command-Line Usage
 
 ### Interactive mode
@@ -167,6 +202,12 @@ The program will ask for the directory and simulate the organization.
 file-organizer --dry-run "C:\path\to\directory"
 ```
 
+### Undo the last organization
+
+```bash
+file-organizer --undo "C:\path\to\directory"
+```
+
 ### Help
 
 ```bash
@@ -186,13 +227,13 @@ This displays the available options and usage examples.
 ### Compile with g++
 
 ```bash
-g++ -std=c++17 src/main.cpp src/organizer.cpp src/utils.cpp -o file-organizer
+g++ -std=c++17 src/main.cpp src/organizer.cpp src/journal.cpp src/utils.cpp -o file-organizer
 ```
 
 On Windows:
 
 ```bash
-g++ -std=c++17 src/main.cpp src/organizer.cpp src/utils.cpp -o file-organizer.exe
+g++ -std=c++17 src/main.cpp src/organizer.cpp src/journal.cpp src/utils.cpp -o file-organizer.exe
 ```
 
 ### Run
@@ -217,6 +258,8 @@ file-organizer/
 │   ├── main.cpp
 │   ├── organizer.cpp
 │   ├── organizer.hpp
+│   ├── journal.cpp
+│   ├── journal.hpp
 │   ├── utils.cpp
 │   └── utils.hpp
 ├── .gitignore
@@ -236,16 +279,31 @@ Contains the main organization logic, including:
 * Category selection
 * Directory creation
 * Duplicate filename handling
+* Skipping incomplete downloads
 * Dry-run processing
 * File moving
+* Undo of the last organization
 
 ### `organizer.hpp`
 
 Contains declarations related to the file organization functionality.
 
+### `journal.cpp`
+
+Reads and writes the operations log (`.file-organizer.log`) used by the undo command. Each line records one operation, with tab-separated fields:
+
+```text
+MKDIR	Documents
+MOVE	report.pdf	Documents/report.pdf
+```
+
+### `journal.hpp`
+
+Contains the declarations of the operations log.
+
 ### `utils.cpp`
 
-Contains utility functions used by the project, such as case conversion for file extensions.
+Contains utility functions used by the project, such as case conversion for file extensions and UTF-8 handling of command-line arguments and console input on Windows, so paths with accented characters (for example `C:\Users\Username\Università`) work correctly.
 
 ### `utils.hpp`
 
@@ -283,8 +341,6 @@ Possible future improvements include:
 * Recursive directory organization
 * File organization by date
 * File organization by size
-* Logging
-* Undo functionality
 * Configuration file for custom categories
 * User-defined extension mappings
 * Hash-based duplicate detection

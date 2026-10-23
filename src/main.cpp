@@ -1,8 +1,11 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <stdexcept>
 
+#include "journal.hpp"
 #include "organizer.hpp"
+#include "utils.hpp"
 
 using namespace std;
 
@@ -18,7 +21,8 @@ void printHelp()
     cout << endl;
 
     cout << "Options:" << endl;
-    cout << "  --dry-run    Simulate the organization without moving files" << endl;
+    cout << "  --dry-run    Simulate the operation without moving files" << endl;
+    cout << "  --undo       Undo the last organization of the directory" << endl;
     cout << "  --help       Show this help message" << endl;
     cout << endl;
 
@@ -27,20 +31,51 @@ void printHelp()
     cout << "  file-organizer --dry-run" << endl;
     cout << "  file-organizer \"C:\\path\\to\\directory\"" << endl;
     cout << "  file-organizer --dry-run \"C:\\path\\to\\directory\"" << endl;
+    cout << "  file-organizer --undo \"C:\\path\\to\\directory\"" << endl;
+}
+
+void printSummary(const OrganizeSummary& summary, bool dryRun, bool undo)
+{
+    cout << endl;
+    cout << "Summary" << (dryRun ? " (dry run)" : "") << endl;
+
+    if (undo)
+    {
+        cout << "  Files " << (dryRun ? "to restore" : "restored") << ": "
+             << summary.moved << endl;
+    }
+    else
+    {
+        cout << "  Files " << (dryRun ? "to move" : "moved") << ": "
+             << summary.moved << endl;
+        cout << "  Skipped (incomplete downloads): " << summary.skipped << endl;
+    }
+
+    cout << "  Errors: " << summary.failed << endl;
+
+    for (const string& error : summary.errors)
+    {
+        cerr << "  - " << error << endl;
+    }
 }
 
 int main(int argc, char* argv[])
 {
+    Utf8Console console;
+
     bool dryRun = false;
+    bool undo = false;
     fs::path mainFolder;
 
-    for (int i = 1; i < argc; i++)
+    for (const string& argument : getArguments(argc, argv))
     {
-        string argument = argv[i];
-
         if (argument == "--dry-run")
         {
             dryRun = true;
+        }
+        else if (argument == "--undo")
+        {
+            undo = true;
         }
         else if (argument == "--help")
         {
@@ -49,7 +84,7 @@ int main(int argc, char* argv[])
         }
         else if (mainFolder.empty())
         {
-            mainFolder = argument;
+            mainFolder = fs::u8path(argument);
         }
         else
         {
@@ -66,10 +101,7 @@ int main(int argc, char* argv[])
     {
         cout << "Insert the path of the main folder: ";
 
-        string path;
-        getline(cin, path);
-
-        mainFolder = path;
+        mainFolder = fs::u8path(readLine());
     }
 
     if (!fs::exists(mainFolder))
@@ -88,28 +120,37 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (undo && !fs::exists(mainFolder / JOURNAL_FILE_NAME))
+    {
+        cout << "Nothing to undo: this folder has no operations log." << endl;
+        return 0;
+    }
+
     OrganizeSummary summary;
 
     try
     {
-        summary = organizeDirectory(mainFolder, dryRun);
+        if (undo)
+        {
+            summary = undoLastRun(mainFolder, dryRun);
+        }
+        else
+        {
+            summary = organizeDirectory(mainFolder, dryRun);
+        }
     }
     catch (const fs::filesystem_error& e)
     {
         cerr << "Filesystem error: " << e.what() << endl;
         return 1;
     }
-
-    cout << endl;
-    cout << "Summary" << (dryRun ? " (dry run)" : "") << endl;
-    cout << "  Files " << (dryRun ? "to move" : "moved") << ": "
-         << summary.moved << endl;
-    cout << "  Errors: " << summary.failed << endl;
-
-    for (const string& error : summary.errors)
+    catch (const runtime_error& e)
     {
-        cerr << "  - " << error << endl;
+        cerr << "Error: " << e.what() << endl;
+        return 1;
     }
+
+    printSummary(summary, dryRun, undo);
 
     return summary.failed > 0 ? 1 : 0;
 }
