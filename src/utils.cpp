@@ -44,6 +44,47 @@ std::string toLower(std::string str) {
     return str;
 }
 
+bool matchesPattern(const std::string& text, const std::string& pattern)
+{
+    size_t t = 0;
+    size_t p = 0;
+
+    // Position of the last * and of the text it was matched against,
+    // to go back and let the * match one more character
+    size_t starPattern = std::string::npos;
+    size_t starText = 0;
+
+    while (t < text.size())
+    {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t]))
+        {
+            t++;
+            p++;
+        }
+        else if (p < pattern.size() && pattern[p] == '*')
+        {
+            starPattern = p++;
+            starText = t;
+        }
+        else if (starPattern != std::string::npos)
+        {
+            p = starPattern + 1;
+            t = ++starText;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    while (p < pattern.size() && pattern[p] == '*')
+    {
+        p++;
+    }
+
+    return p == pattern.size();
+}
+
 std::vector<std::string> getArguments(int argc, char* argv[])
 {
     std::vector<std::string> arguments;

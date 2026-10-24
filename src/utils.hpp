@@ -5,6 +5,9 @@
 
 std::string toLower(std::string str);
 
+// Wildcard match: * = any characters, ? = exactly one character
+bool matchesPattern(const std::string& text, const std::string& pattern);
+
 // Command line arguments encoded in UTF-8 (on Windows argv uses the
 // ANSI code page, which can't represent every file name)
 std::vector<std::string> getArguments(int argc, char* argv[]);

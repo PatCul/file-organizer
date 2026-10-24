@@ -21,7 +21,8 @@ struct JournalEntry
 
     Type type;
 
-    // Paths are relative to the organized folder
+    // Paths are relative to the organized folder, or absolute when
+    // outside of it (see pathForJournal)
     fs::path from;
     fs::path to; // Only used by Move
 };
@@ -40,6 +41,10 @@ private:
 
     std::ofstream file;
 };
+
+// Path relative to the organized folder if it is inside it (so the
+// folder can be moved or renamed), absolute otherwise
+fs::path pathForJournal(const fs::path& path, const fs::path& directory);
 
 std::vector<JournalEntry> readJournal(const fs::path& directory);
 void writeJournal(const fs::path& directory, const std::vector<JournalEntry>& entries);

@@ -2,7 +2,9 @@
 #include <string>
 #include <filesystem>
 #include <stdexcept>
+#include <vector>
 
+#include "config.hpp"
 #include "journal.hpp"
 #include "organizer.hpp"
 #include "utils.hpp"
@@ -21,10 +23,21 @@ void printHelp()
     cout << endl;
 
     cout << "Options:" << endl;
-    cout << "  --dry-run    Simulate the operation without moving files" << endl;
-    cout << "  --undo       Undo the last organization of the directory" << endl;
-    cout << "  --help       Show this help message" << endl;
+    cout << "  --dry-run          Simulate the operation without moving files" << endl;
+    cout << "  --undo             Undo the last organization of the directory" << endl;
+    cout << "  --config <file>    Use this config file" << endl;
+    cout << "  --init-config      Create a config file with the default categories" << endl;
+    cout << "  --help             Show this help message" << endl;
     cout << endl;
+
+    fs::path configPath = defaultConfigPath();
+
+    if (!configPath.empty())
+    {
+        cout << "Default config file:" << endl;
+        cout << "  " << configPath.u8string() << endl;
+        cout << endl;
+    }
 
     cout << "Examples:" << endl;
     cout << "  file-organizer" << endl;
@@ -32,6 +45,7 @@ void printHelp()
     cout << "  file-organizer \"C:\\path\\to\\directory\"" << endl;
     cout << "  file-organizer --dry-run \"C:\\path\\to\\directory\"" << endl;
     cout << "  file-organizer --undo \"C:\\path\\to\\directory\"" << endl;
+    cout << "  file-organizer --init-config" << endl;
 }
 
 void printSummary(const OrganizeSummary& summary, bool dryRun, bool undo)
@@ -48,7 +62,27 @@ void printSummary(const OrganizeSummary& summary, bool dryRun, bool undo)
     {
         cout << "  Files " << (dryRun ? "to move" : "moved") << ": "
              << summary.moved << endl;
-        cout << "  Skipped (incomplete downloads): " << summary.skipped << endl;
+
+        int skipped = summary.skippedDownloads
+            + summary.skippedExcluded
+            + summary.leftInPlace;
+
+        cout << "  Skipped: " << skipped << endl;
+
+        if (summary.skippedDownloads > 0)
+        {
+            cout << "    incomplete downloads: " << summary.skippedDownloads << endl;
+        }
+
+        if (summary.skippedExcluded > 0)
+        {
+            cout << "    excluded: " << summary.skippedExcluded << endl;
+        }
+
+        if (summary.leftInPlace > 0)
+        {
+            cout << "    no matching rule: " << summary.leftInPlace << endl;
+        }
     }
 
     cout << "  Errors: " << summary.failed << endl;
@@ -65,10 +99,16 @@ int main(int argc, char* argv[])
 
     bool dryRun = false;
     bool undo = false;
+    bool initConfig = false;
+    fs::path configFile;
     fs::path mainFolder;
 
-    for (const string& argument : getArguments(argc, argv))
+    vector<string> arguments = getArguments(argc, argv);
+
+    for (size_t i = 0; i < arguments.size(); i++)
     {
+        const string& argument = arguments[i];
+
         if (argument == "--dry-run")
         {
             dryRun = true;
@@ -77,10 +117,32 @@ int main(int argc, char* argv[])
         {
             undo = true;
         }
+        else if (argument == "--config")
+        {
+            if (i + 1 >= arguments.size())
+            {
+                cerr << "Error: --config needs the path of the config file." << endl;
+                return 1;
+            }
+
+            configFile = fs::u8path(arguments[++i]);
+        }
+        else if (argument == "--init-config")
+        {
+            initConfig = true;
+        }
         else if (argument == "--help")
         {
             printHelp();
             return 0;
+        }
+        else if (argument.rfind("--", 0) == 0)
+        {
+            cerr << "Error: Unknown option '" << argument << "'." << endl;
+            cerr << "Use 'file-organizer --help' for more information."
+                 << endl;
+
+            return 1;
         }
         else if (mainFolder.empty())
         {
@@ -93,6 +155,68 @@ int main(int argc, char* argv[])
                  << endl;
 
             return 1;
+        }
+    }
+
+    // Without --config the default location is used, if the file exists
+    fs::path configPath = configFile.empty() ? defaultConfigPath() : configFile;
+
+    if (initConfig)
+    {
+        if (configPath.empty())
+        {
+            cerr << "Error: Cannot find the default config folder, use --config <file>." << endl;
+            return 1;
+        }
+
+        try
+        {
+            writeDefaultConfig(configPath);
+        }
+        catch (const exception& e)
+        {
+            cerr << "Error: " << e.what() << endl;
+            return 1;
+        }
+
+        cout << "Config file created:" << endl;
+        cout << "  " << configPath.u8string() << endl;
+        cout << "Edit it to change categories, exclusions and destinations." << endl;
+
+        return 0;
+    }
+
+    // The undo only needs the log, not the config
+    Config config = defaultConfig();
+
+    if (!undo)
+    {
+        if (!configFile.empty() && !fs::exists(configFile))
+        {
+            cerr << "Error: The config file " << configFile.u8string()
+                 << " doesn't exist" << endl;
+
+            return 1;
+        }
+
+        if (!configPath.empty() && fs::exists(configPath))
+        {
+            try
+            {
+                config = loadConfig(configPath);
+            }
+            catch (const ConfigError& e)
+            {
+                cerr << "Config error: " << e.what() << endl;
+                return 1;
+            }
+
+            cout << "Using config: " << configPath.u8string() << endl;
+
+            for (const string& warning : config.warnings)
+            {
+                cerr << "Warning: " << warning << endl;
+            }
         }
     }
 
@@ -120,6 +244,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // Absolute, so the paths in the log don't depend on the current folder
+    mainFolder = fs::absolute(mainFolder);
+
     if (undo && !fs::exists(mainFolder / JOURNAL_FILE_NAME))
     {
         cout << "Nothing to undo: this folder has no operations log." << endl;
@@ -136,7 +263,7 @@ int main(int argc, char* argv[])
         }
         else
         {
-            summary = organizeDirectory(mainFolder, dryRun);
+            summary = organizeDirectory(mainFolder, config, dryRun);
         }
     }
     catch (const fs::filesystem_error& e)

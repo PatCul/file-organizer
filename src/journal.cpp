@@ -52,6 +52,19 @@ void JournalWriter::write(const JournalEntry& entry)
     }
 }
 
+fs::path pathForJournal(const fs::path& path, const fs::path& directory)
+{
+    fs::path relative = path.lexically_normal().lexically_relative(directory.lexically_normal());
+
+    // Empty on another drive, starting with ".." outside the folder
+    if (relative.empty() || *relative.begin() == "..")
+    {
+        return path.lexically_normal();
+    }
+
+    return relative;
+}
+
 std::vector<JournalEntry> readJournal(const fs::path& directory)
 {
     std::vector<JournalEntry> entries;

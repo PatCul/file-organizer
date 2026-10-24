@@ -1,6 +1,7 @@
 #include "organizer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -10,210 +11,197 @@
 #include "journal.hpp"
 #include "utils.hpp"
 
-OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
+// Files still being downloaded or written by another program:
+// moving them would break the download
+static const std::set<std::string> INCOMPLETE_DOWNLOADS = {
+    ".crdownload", // Chrome, Edge
+    ".part",       // Firefox
+    ".download",   // Safari
+    ".tmp"
+};
+
+static bool onSameDrive(const fs::path& first, const fs::path& second)
 {
-    std::map<std::string, std::string> categories = {
+    return toLower(first.root_name().u8string()) == toLower(second.root_name().u8string());
+}
 
-        // Documents
-        {".txt", "Documents"},
-        {".doc", "Documents"},
-        {".docx", "Documents"},
-        {".pdf", "Documents"},
-        {".odt", "Documents"},
-        {".rtf", "Documents"},
-        {".tex", "Documents"},
+// Moves a file, also between different drives (C: -> D:), where
+// a simple rename is not possible
+static void moveFile(const fs::path& from, const fs::path& to)
+{
+    std::error_code error;
+    fs::rename(from, to, error);
 
-        // Spreadsheets
-        {".xls", "Spreadsheets"},
-        {".xlsx", "Spreadsheets"},
-        {".csv", "Spreadsheets"},
-        {".ods", "Spreadsheets"},
+    if (!error)
+    {
+        return;
+    }
 
-        // Presentations
-        {".ppt", "Presentations"},
-        {".pptx", "Presentations"},
-        {".odp", "Presentations"},
+    if (error != std::errc::cross_device_link && onSameDrive(from, to))
+    {
+        throw fs::filesystem_error("cannot move", from, to, error);
+    }
 
-        // Images
-        {".jpg", "Images"},
-        {".jpeg", "Images"},
-        {".png", "Images"},
-        {".gif", "Images"},
-        {".bmp", "Images"},
-        {".webp", "Images"},
-        {".svg", "Images"},
-        {".ico", "Images"},
-        {".tiff", "Images"},
+    // Copy, then delete the original only if the copy succeeded
+    fs::copy_file(from, to);
 
-        // Videos
-        {".mp4", "Videos"},
-        {".mkv", "Videos"},
-        {".avi", "Videos"},
-        {".mov", "Videos"},
-        {".wmv", "Videos"},
-        {".webm", "Videos"},
+    std::error_code removeError;
+    fs::remove(from, removeError);
 
-        // Audio
-        {".mp3", "Music"},
-        {".wav", "Music"},
-        {".flac", "Music"},
-        {".aac", "Music"},
-        {".ogg", "Music"},
-        {".m4a", "Music"},
+    if (removeError)
+    {
+        // Don't leave the file in two places
+        std::error_code ignored;
+        fs::remove(to, ignored);
 
-        // Archives
-        {".zip", "Archives"},
-        {".rar", "Archives"},
-        {".7z", "Archives"},
-        {".tar", "Archives"},
-        {".gz", "Archives"},
-        {".bz2", "Archives"},
+        throw fs::filesystem_error("cannot remove the original after copying it", from, to, removeError);
+    }
+}
 
-        // Programming
-        {".cpp", "Code"},
-        {".h", "Code"},
-        {".hpp", "Code"},
-        {".c", "Code"},
-        {".cs", "Code"},
-        {".java", "Code"},
-        {".py", "Code"},
-        {".js", "Code"},
-        {".ts", "Code"},
-        {".php", "Code"},
-        {".html", "Code"},
-        {".css", "Code"},
-        {".sql", "Code"},
-        {".json", "Code"},
-        {".xml", "Code"},
+// Creates a folder and its missing parents, recording each of them
+// in the journal so the undo can remove them
+static void createFolder(const fs::path& folder, const fs::path& directory, JournalWriter& journal)
+{
+    std::vector<fs::path> missing;
 
-        // Executables / installers
-        {".exe", "Programs"},
-        {".msi", "Programs"},
+    for (fs::path current = folder; !current.empty() && !fs::exists(current); current = current.parent_path())
+    {
+        missing.push_back(current);
 
-        // Disk images
-        {".iso", "Disk Images"},
-        {".img", "Disk Images"},
+        if (current == current.parent_path())
+        {
+            break;
+        }
+    }
 
-        // Fonts
-        {".ttf", "Fonts"},
-        {".otf", "Fonts"},
-        {".woff", "Fonts"},
-        {".woff2", "Fonts"},
+    for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+    {
+        fs::create_directory(*it);
+        journal.recordCreateDirectory(pathForJournal(*it, directory));
+    }
+}
 
-        // E-books
-        {".epub", "Ebooks"},
-        {".mobi", "Ebooks"},
+static std::string displayPath(const fs::path& path, const fs::path& directory)
+{
+    fs::path shown = pathForJournal(path, directory);
+    return shown.make_preferred().u8string();
+}
 
-        // Subtitles
-        {".srt", "Subtitles"},
-        {".ass", "Subtitles"},
+static bool isSameFolder(const fs::path& first, const fs::path& second)
+{
+    std::error_code error;
+    return fs::equivalent(first, second, error);
+}
 
-        // 3D / CAD
-        {".obj", "3D"},
-        {".fbx", "3D"},
-        {".stl", "3D"},
-        {".blend", "3D"},
+OrganizeSummary organizeDirectory(const fs::path& directory, const Config& config, bool dryRun)
+{
+    // The first rule that contains an extension wins
+    std::map<std::string, fs::path> folderByExtension;
 
-        // Database
-        {".db", "Database"},
-        {".sqlite", "Database"},
-        {".sqlite3", "Database"},
-
-        // Logs
-        {".log", "Logs"},
-
-        // Backups
-        {".bak", "Backups"}
-    };
-
-    // Files still being downloaded or written by another program:
-    // moving them would break the download
-    const std::set<std::string> incompleteDownloads = {
-        ".crdownload", // Chrome, Edge
-        ".part",       // Firefox
-        ".download",   // Safari
-        ".tmp"
-    };
+    for (const Rule& rule : config.rules)
+    {
+        for (const std::string& extension : rule.extensions)
+        {
+            folderByExtension.insert({extension, rule.folder});
+        }
+    }
 
     OrganizeSummary summary;
 
+    struct PlannedMove
+    {
+        fs::path file;
+        fs::path folder;
+    };
+
     // Collect the files first: moving them while iterating the
     // directory would modify it during the iteration
-    std::vector<fs::path> files;
+    std::vector<PlannedMove> moves;
 
     for (const fs::directory_entry& entry : fs::directory_iterator(directory))
     {
-        if (!entry.is_regular_file()
-            || entry.path().filename() == JOURNAL_FILE_NAME)
+        const fs::path& file = entry.path();
+
+        if (!entry.is_regular_file() || file.filename() == JOURNAL_FILE_NAME)
         {
             continue;
         }
 
-        if (incompleteDownloads.count(toLower(entry.path().extension().string())))
+        std::string extension = toLower(file.extension().u8string());
+
+        if (INCOMPLETE_DOWNLOADS.count(extension))
         {
-            summary.skipped++;
+            summary.skippedDownloads++;
             continue;
         }
 
-        files.push_back(entry.path());
+        std::string name = toLower(file.filename().u8string());
+
+        bool excluded = std::any_of(
+            config.exclude.begin(),
+            config.exclude.end(),
+            [&](const std::string& pattern)
+            {
+                return matchesPattern(name, pattern);
+            }
+        );
+
+        if (excluded)
+        {
+            summary.skippedExcluded++;
+            continue;
+        }
+
+        auto it = folderByExtension.find(extension);
+        fs::path folder = it != folderByExtension.end() ? it->second : config.other;
+
+        // An absolute folder ignores the organized directory
+        folder = folder.empty() ? fs::path() : directory / folder;
+
+        if (folder.empty() || isSameFolder(folder, directory))
+        {
+            summary.leftInPlace++;
+            continue;
+        }
+
+        moves.push_back({file, folder});
     }
 
     // Opened only when there is something to move, so a run that
     // moves nothing keeps the log of the previous run
     std::optional<JournalWriter> journal;
 
-    if (!dryRun && !files.empty())
+    if (!dryRun && !moves.empty())
     {
         journal.emplace(directory);
     }
 
-    for (const fs::path& file : files)
+    for (const PlannedMove& move : moves)
     {
         // A single failing file (locked, missing permissions...)
         // must not stop the organization of the others
         try
         {
-            std::string extension = toLower(file.extension().string());
-
-            auto it = categories.find(extension);
-
-            fs::path categoryFolder;
-
-            if (it == categories.end())
+            if (!dryRun && !fs::exists(move.folder))
             {
-                categoryFolder = directory / "Other";
-            }
-            else
-            {
-                categoryFolder = directory / it->second;
+                createFolder(move.folder, directory, *journal);
             }
 
-            if (!fs::exists(categoryFolder))
-            {
-                if (!dryRun)
-                {
-                    fs::create_directory(categoryFolder);
-                    journal->recordCreateDirectory(categoryFolder.lexically_relative(directory));
-                }
-            }
-
-            fs::path newPath = categoryFolder / file.filename();
-
-            newPath = getUniquePath(newPath);
+            fs::path newPath = getUniquePath(move.folder / move.file.filename());
 
             if (!dryRun)
             {
-                fs::rename(file, newPath);
+                moveFile(move.file, newPath);
                 journal->recordMove(
-                    file.lexically_relative(directory),
-                    newPath.lexically_relative(directory));
+                    pathForJournal(move.file, directory),
+                    pathForJournal(newPath, directory));
             }
             else
             {
                 std::cout << "[DRY RUN] "
-                    << file
+                    << displayPath(move.file, directory)
                     << " -> "
-                    << newPath
+                    << displayPath(newPath, directory)
                     << std::endl;
             }
 
@@ -222,7 +210,7 @@ OrganizeSummary organizeDirectory(const fs::path& directory, bool dryRun)
         catch (const fs::filesystem_error& e)
         {
             summary.failed++;
-            summary.errors.push_back(file.filename().u8string() + ": " + e.what());
+            summary.errors.push_back(move.file.filename().u8string() + ": " + e.what());
         }
     }
 
@@ -254,6 +242,7 @@ OrganizeSummary undoLastRun(const fs::path& directory, bool dryRun)
 
         if (entry.type == JournalEntry::Type::CreateDirectory)
         {
+            // Absolute paths stay absolute when joined
             fs::path folder = directory / entry.from;
 
             // Folders that still contain files are kept
@@ -292,14 +281,14 @@ OrganizeSummary undoLastRun(const fs::path& directory, bool dryRun)
 
             if (!dryRun)
             {
-                fs::rename(current, original);
+                moveFile(current, original);
             }
             else
             {
                 std::cout << "[DRY RUN] "
-                    << entry.to.u8string()
+                    << displayPath(current, directory)
                     << " -> "
-                    << entry.from.u8string()
+                    << displayPath(original, directory)
                     << std::endl;
             }
 
@@ -341,13 +330,13 @@ fs::path getUniquePath(const fs::path& path)
     do
     {
         std::string name =
-            path.stem().string()
+            path.stem().u8string()
             + " ("
             + std::to_string(counter)
             + ")"
-            + path.extension().string();
+            + path.extension().u8string();
 
-        newPath = path.parent_path() / name;
+        newPath = path.parent_path() / fs::u8path(name);
 
         counter++;
 
